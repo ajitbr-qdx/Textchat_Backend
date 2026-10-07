@@ -1,0 +1,28 @@
+info:
+  name: Send Message (REST)
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/chats/{{chatId}}/messages"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "message": "Hello from Postman!"
+      }
+  auth:
+    type: bearer
+    token: "{{authToken}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: Send a message via REST endpoint (persists to MySQL and broadcasts via Socket.IO).

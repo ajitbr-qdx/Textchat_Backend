@@ -1,0 +1,24 @@
+info:
+  name: Get All Users
+  type: http
+  seq: 1
+
+http:
+  method: GET
+  url: "{{baseUrl}}/api/users?search="
+  params:
+    - name: search
+      value: ""
+      type: query
+      description: Optional search term for name or email
+  auth:
+    type: bearer
+    token: "{{authToken}}"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: Get all registered users except current user.

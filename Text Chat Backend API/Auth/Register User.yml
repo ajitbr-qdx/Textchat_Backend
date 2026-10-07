@@ -1,0 +1,45 @@
+info:
+  name: Register User
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/auth/register"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "name": "Alice",
+        "email": "alice@example.com",
+        "password": "Password123"
+      }
+  auth: inherit
+
+runtime:
+  scripts:
+    - type: after-response
+      code: "if (res.getStatus() === 201) {\r
+
+        \    var json = res.getBody();\r
+
+        \    if (json.data && json.data.token) {\r
+
+        \        bru.setVar('authToken', json.data.token);\r
+
+        \        console.log('authToken automatically saved');\r
+
+        \    }\r
+
+        }"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: Register a new user account. On success, updates {{authToken}} automatically.

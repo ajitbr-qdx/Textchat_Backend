@@ -1,0 +1,45 @@
+info:
+  name: Create or Get Chat
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{baseUrl}}/api/chats"
+  headers:
+    - name: Content-Type
+      value: application/json
+  body:
+    type: json
+    data: |-
+      {
+        "recipientId": 2
+      }
+  auth:
+    type: bearer
+    token: "{{authToken}}"
+
+runtime:
+  scripts:
+    - type: after-response
+      code: "if (res.getStatus() === 200 || res.getStatus() === 201) {\r
+
+        \    var json = res.getBody();\r
+
+        \    if (json.data && json.data.chat && json.data.chat.id) {\r
+
+        \        bru.setVar('chatId', json.data.chat.id.toString());\r
+
+        \        console.log('chatId set to: ' + json.data.chat.id);\r
+
+        \    }\r
+
+        }"
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
+
+docs: Start a new conversation or retrieve existing one with recipientId. Automatically sets {{chatId}}.
