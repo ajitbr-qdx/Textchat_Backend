@@ -63,7 +63,7 @@ export const getMessages = async (
     ]);
 
     // Format matching exact Android specification:
-    // { "id", "chatId", "senderId", "senderName", "message", "mediaUrl", "timestamp" }
+    // { "id", "chatId", "senderId", "senderName", "message", "mediaUrl", "status", "seenAt", "timestamp" }
     const formattedMessages = messages.map((msg) => ({
       id: msg.id,
       chatId: String(msg.chatId),
@@ -71,6 +71,8 @@ export const getMessages = async (
       senderName: msg.sender?.name || '',
       message: msg.message,
       mediaUrl: msg.mediaUrl || null,
+      status: msg.status,
+      seenAt: msg.seenAt,
       timestamp: msg.createdAt.toISOString(),
       // Backward-compatible fields
       chat_id: msg.chatId,
@@ -139,6 +141,7 @@ export const sendMessage = async (
         senderId: currentUserId,
         message: message.trim(),
         mediaUrl: mediaUrl || null,
+        status: 'sent',
       },
       include: {
         sender: {
@@ -158,6 +161,8 @@ export const sendMessage = async (
       senderName: newMessage.sender?.name || req.user?.name || '',
       message: newMessage.message,
       mediaUrl: newMessage.mediaUrl || null,
+      status: newMessage.status,
+      seenAt: newMessage.seenAt,
       timestamp: newMessage.createdAt.toISOString(),
       chat_id: newMessage.chatId,
       sender_id: newMessage.senderId,
@@ -169,10 +174,15 @@ export const sendMessage = async (
     try {
       const io = getSocketIO();
       if (io) {
+        // Broadcast to chat room once
         io.to(`chat_${chatId}`).emit('new_message', payload);
-        io.to(String(chatId)).emit('new_message', payload);
+
+        // Notify recipient personal channel
         const recipientId = chat.user1Id === currentUserId ? chat.user2Id : chat.user1Id;
-        io.to(`user_${recipientId}`).emit('new_message', payload);
+        io.to(`user_${recipientId}`).emit('chat_notification', {
+          chatId: String(chatId),
+          message: payload,
+        });
       }
     } catch {
       // Socket not yet initialized or disconnected, continue
@@ -239,6 +249,7 @@ export const uploadAttachment = async (
         senderId: currentUserId,
         message: caption.trim() || '[Photo]',
         mediaUrl: fileUrl,
+        status: 'sent',
       },
       include: {
         sender: {
@@ -258,6 +269,8 @@ export const uploadAttachment = async (
       senderName: newMessage.sender?.name || req.user?.name || '',
       message: newMessage.message,
       mediaUrl: newMessage.mediaUrl,
+      status: newMessage.status,
+      seenAt: newMessage.seenAt,
       timestamp: newMessage.createdAt.toISOString(),
       chat_id: newMessage.chatId,
       sender_id: newMessage.senderId,
@@ -269,10 +282,15 @@ export const uploadAttachment = async (
     try {
       const io = getSocketIO();
       if (io) {
+        // Broadcast to chat room once
         io.to(`chat_${chatId}`).emit('new_message', payload);
-        io.to(String(chatId)).emit('new_message', payload);
+
+        // Notify recipient personal channel
         const recipientId = chat.user1Id === currentUserId ? chat.user2Id : chat.user1Id;
-        io.to(`user_${recipientId}`).emit('new_message', payload);
+        io.to(`user_${recipientId}`).emit('chat_notification', {
+          chatId: String(chatId),
+          message: payload,
+        });
       }
     } catch {
       // Continue
@@ -285,6 +303,68 @@ export const uploadAttachment = async (
       data: {
         message: payload,
         mediaUrl: fileUrl,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const markChatAsSeen = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const currentUserId = req.user?.id;
+    if (!currentUserId) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+
+    const chatId = parseInt(String(req.params.chatId), 10);
+    if (isNaN(chatId)) {
+      res.status(400).json({ success: false, message: 'Invalid chat ID' });
+      return;
+    }
+
+    const now = new Date();
+
+    // Mark all messages from the other user in this chat as seen
+    const updated = await prisma.message.updateMany({
+      where: {
+        chatId,
+        senderId: { not: currentUserId },
+        status: { not: 'seen' },
+      },
+      data: {
+        status: 'seen',
+        seenAt: now,
+      },
+    });
+
+    // Broadcast message_seen event via WebSocket
+    try {
+      const io = getSocketIO();
+      if (io) {
+        io.to(`chat_${chatId}`).emit('message_seen', {
+          chatId: String(chatId),
+          userId: currentUserId,
+          status: 'seen',
+          seenAt: now.toISOString(),
+        });
+      }
+    } catch {
+      // Ignore
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `Marked ${updated.count} messages as seen`,
+      data: {
+        chatId: String(chatId),
+        count: updated.count,
+        seenAt: now.toISOString(),
       },
     });
   } catch (error) {

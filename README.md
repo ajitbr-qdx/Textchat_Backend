@@ -161,22 +161,26 @@ const socket = io("http://<SERVER_IP>:5000", {
 
 | Event | Payload | Description |
 |---|---|---|
-| `join_chat` | `{ "chatId": "101" }` | Join real-time room for chat |
+| `join_chat` | `{ "chatId": "101" }` | Join real-time room for chat (`chat_101`) |
 | `leave_chat` | `{ "chatId": "101" }` | Leave the chat room |
-| `send_message` | `{ "chatId": "101", "recipientId": 2, "message": "hello" }` | Persists in MySQL and broadcasts to room |
-| `typing` | `{ "chatId": "101" }` | Emits typing notification |
+| `send_message` | `{ "chatId": "101", "recipientId": 2, "message": "hello", "mediaUrl": null }` | Persists in MySQL with status `sent` and broadcasts |
+| `message_delivered` | `{ "chatId": "101", "messageId": 42 }` | Acknowledges message received on recipient device |
+| `message_seen` | `{ "chatId": "101", "messageId": 42 }` | Marks message(s) as seen/read |
+| `typing` | `{ "chatId": "101" }` | Emits typing notification to partner |
 | `stop_typing` | `{ "chatId": "101" }` | Stops typing notification |
 
 ### Server -> Client Events
 
 | Event | Payload | Description |
 |---|---|---|
-| `new_message` | `{ "id": 1, "chatId": "101", "senderId": 2, "senderName": "Alice", "message": "hello", "mediaUrl": null, "timestamp": "..." }` | Broadcast when any user sends message |
-| `user_typing` | `{ "chatId": "101", "userId": 2, "name": "Alice" }` | Partner is typing |
+| `new_message` | `{ "id": 1, "chatId": "101", "senderId": 2, "senderName": "Alice", "message": "hello", "mediaUrl": null, "status": "sent", "timestamp": "..." }` | Broadcast when any user sends a message |
+| `message_delivered` | `{ "chatId": "101", "messageId": 42, "status": "delivered", "timestamp": "..." }` | Updates status to delivered (double tick `✓✓`) |
+| `message_seen` | `{ "chatId": "101", "messageId": 42, "userId": 2, "status": "seen", "seenAt": "..." }` | Updates status to seen (blue double tick `✓✓`) |
+| `user_typing` | `{ "chatId": "101", "userId": 2, "name": "Alice" }` | Partner is currently typing |
 | `user_stop_typing` | `{ "chatId": "101", "userId": 2 }` | Partner stopped typing |
-| `user_typing` | `{ chatId, userId, name }` | Partner started typing |
-| `user_stop_typing`| `{ chatId, userId }` | Partner stopped typing |
-| `chat_notification`| `{ chatId, message }` | Background alert on user's personal channel |
+| `user_online` | `{ "userId": 2, "name": "Alice", "timestamp": "..." }` | User connected / online |
+| `user_offline` | `{ "userId": 2, "lastSeen": "..." }` | User disconnected / offline |
+| `chat_notification` | `{ "chatId": "101", "message": { ... } }` | Background alert on user's personal channel |
 
 ---
 

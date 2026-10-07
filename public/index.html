@@ -261,12 +261,52 @@
       padding: 0 1.25rem;
     }
 
+    .msg-status {
+      font-size: 0.85rem;
+      font-weight: 700;
+      letter-spacing: -1px;
+      margin-left: 6px;
+      opacity: 1 !important;
+      display: inline-flex;
+      align-items: center;
+    }
+    .msg-status.seen {
+      color: #38bdf8 !important;
+      text-shadow: 0 0 8px rgba(56, 189, 248, 0.7);
+    }
+    .msg-status.delivered {
+      color: #cbd5e1 !important;
+    }
+    .msg-status.sent {
+      color: #94a3b8 !important;
+    }
+
     .typing-alert {
-      font-size: 0.8rem;
-      color: var(--accent);
-      min-height: 1.2rem;
-      padding: 0 1rem;
-      font-style: italic;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.82rem;
+      color: #38bdf8;
+      min-height: 1.5rem;
+      padding: 0.25rem 1rem;
+      font-weight: 500;
+    }
+    .typing-dots {
+      display: inline-flex;
+      gap: 3px;
+    }
+    .typing-dots span {
+      width: 5px;
+      height: 5px;
+      background: #38bdf8;
+      border-radius: 50%;
+      animation: typingPulse 0.9s infinite alternate;
+    }
+    .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes typingPulse {
+      0% { opacity: 0.2; transform: scale(0.7); }
+      100% { opacity: 1; transform: scale(1.3); }
     }
 
     pre code {
@@ -530,7 +570,10 @@ messages: id, chat_id, sender_id, message, created_at</code></pre>
 
         if (socket) {
           socket.emit('join_chat', { chatId: activeChat.id });
+          socket.emit('message_seen', { chatId: activeChat.id });
         }
+        // Mark all unread messages as seen in database
+        apiRequest(`/api/chats/${activeChat.id}/seen`, 'PUT');
 
         loadMessages(chatId);
         loadChats();
@@ -547,18 +590,50 @@ messages: id, chat_id, sender_id, message, created_at</code></pre>
       }
     }
 
+    function getStatusTickHtml(status, isSent) {
+      if (!isSent) return '';
+      if (status === 'seen') {
+        return `<span class="msg-status seen" title="Seen">✓✓</span>`;
+      } else if (status === 'delivered') {
+        return `<span class="msg-status delivered" title="Delivered">✓✓</span>`;
+      }
+      return `<span class="msg-status sent" title="Sent">✓</span>`;
+    }
+
     function appendMessage(msg) {
-      const isSent = msg.sender_id === currentUser.id;
+      if (!msg) return;
+
+      // Deduplicate: prevent appending the exact same message twice
+      if (msg.id && document.getElementById(`msg-${msg.id}`)) {
+        return;
+      }
+
+      const senderId = msg.senderId || msg.sender_id;
+      const isSent = Number(senderId) === Number(currentUser.id);
       const bubble = document.createElement('div');
+      if (msg.id) bubble.id = `msg-${msg.id}`;
       bubble.className = `msg-bubble ${isSent ? 'sent' : 'received'}`;
       
-      const timeStr = new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const timeVal = msg.timestamp || msg.created_at;
+      const timeStr = timeVal ? new Date(timeVal).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+      const senderDisplayName = isSent ? 'You' : (msg.senderName || (msg.sender ? msg.sender.name : 'User'));
+      const statusHtml = getStatusTickHtml(msg.status || 'sent', isSent);
+
+      let contentHtml = '';
+      if (msg.mediaUrl) {
+        contentHtml += `<div style="margin-bottom: 0.5rem;"><img src="${escapeHtml(msg.mediaUrl)}" style="max-width: 100%; max-height: 200px; border-radius: 8px; display: block;" alt="attachment" /></div>`;
+      }
+      if (msg.message && msg.message !== '[Photo]' && msg.message !== '[Attachment]') {
+        contentHtml += `<div>${escapeHtml(msg.message)}</div>`;
+      } else if (!msg.mediaUrl) {
+        contentHtml += `<div>${escapeHtml(msg.message || '')}</div>`;
+      }
 
       bubble.innerHTML = `
-        <div>${escapeHtml(msg.message)}</div>
+        ${contentHtml}
         <div class="msg-meta">
-          <span>${isSent ? 'You' : (msg.sender ? msg.sender.name : 'User')}</span>
-          <span>${timeStr}</span>
+          <span>${escapeHtml(senderDisplayName)}</span>
+          <span style="display: flex; align-items: center;">${timeStr} ${statusHtml}</span>
         </div>
       `;
       messagesContainer.appendChild(bubble);
@@ -586,6 +661,7 @@ messages: id, chat_id, sender_id, message, created_at</code></pre>
         socketStatus.textContent = `WebSocket: Connected (${socket.id})`;
         if (activeChat) {
           socket.emit('join_chat', { chatId: activeChat.id });
+          socket.emit('message_seen', { chatId: activeChat.id });
         }
       });
 
@@ -594,22 +670,94 @@ messages: id, chat_id, sender_id, message, created_at</code></pre>
         socketStatus.textContent = 'WebSocket: Disconnected';
       });
 
+      // 1. New Message
       socket.on('new_message', (msg) => {
-        if (activeChat && msg.chat_id === activeChat.id) {
+        const msgChatId = msg.chatId || msg.chat_id;
+        if (activeChat && String(msgChatId) === String(activeChat.id)) {
           appendMessage(msg);
+          // Auto-acknowledge delivered and seen if viewing this chat
+          const senderId = msg.senderId || msg.sender_id;
+          if (Number(senderId) !== Number(currentUser.id)) {
+            socket.emit('message_delivered', { chatId: activeChat.id, messageId: msg.id });
+            socket.emit('message_seen', { chatId: activeChat.id, messageId: msg.id });
+          }
         }
         loadChats();
       });
 
+      // 2. Message Delivered (Double Gray Tick)
+      socket.on('message_delivered', (data) => {
+        if (activeChat && String(data.chatId) === String(activeChat.id)) {
+          if (data.messageId) {
+            const el = document.getElementById(`msg-${data.messageId}`);
+            if (el) {
+              const statusEl = el.querySelector('.msg-status');
+              if (statusEl && !statusEl.classList.contains('seen')) {
+                statusEl.className = 'msg-status delivered';
+                statusEl.textContent = '✓✓';
+                statusEl.title = 'Delivered';
+              }
+            }
+          } else {
+            document.querySelectorAll('.msg-bubble.sent .msg-status.sent').forEach((statusEl) => {
+              statusEl.className = 'msg-status delivered';
+              statusEl.textContent = '✓✓';
+              statusEl.title = 'Delivered';
+            });
+          }
+        }
+      });
+
+      // 3. Message Seen (Double Blue Tick)
+      socket.on('message_seen', (data) => {
+        if (activeChat && String(data.chatId) === String(activeChat.id)) {
+          if (data.messageId) {
+            const el = document.getElementById(`msg-${data.messageId}`);
+            if (el) {
+              const statusEl = el.querySelector('.msg-status');
+              if (statusEl) {
+                statusEl.className = 'msg-status seen';
+                statusEl.textContent = '✓✓';
+                statusEl.title = 'Seen';
+              }
+            }
+          } else {
+            // All unread messages in chat marked seen
+            document.querySelectorAll('.msg-bubble.sent .msg-status').forEach((statusEl) => {
+              statusEl.className = 'msg-status seen';
+              statusEl.textContent = '✓✓';
+              statusEl.title = 'Seen';
+            });
+          }
+        }
+      });
+
+      // 4. Typing Indicators
       socket.on('user_typing', (data) => {
-        if (activeChat && data.chatId === activeChat.id) {
-          typingIndicator.textContent = `${data.name} is typing...`;
+        if (activeChat && String(data.chatId) === String(activeChat.id)) {
+          typingIndicator.innerHTML = `
+            <div class="typing-dots"><span></span><span></span><span></span></div>
+            <span>${escapeHtml(data.name || 'Partner')} is typing...</span>
+          `;
         }
       });
 
       socket.on('user_stop_typing', (data) => {
-        if (activeChat && data.chatId === activeChat.id) {
-          typingIndicator.textContent = '';
+        if (activeChat && String(data.chatId) === String(activeChat.id)) {
+          typingIndicator.innerHTML = '';
+        }
+      });
+
+      // 5. Presence (Online / Offline)
+      socket.on('user_online', (data) => {
+        if (activeChat && data.userId === activeChat.partner.id) {
+          chatHeaderSub.textContent = `Chat #${activeChat.id} • Online 🟢`;
+        }
+      });
+
+      socket.on('user_offline', (data) => {
+        if (activeChat && data.userId === activeChat.partner.id) {
+          chatHeaderSub.textContent = `Chat #${activeChat.id} • Offline`;
         }
       });
     }

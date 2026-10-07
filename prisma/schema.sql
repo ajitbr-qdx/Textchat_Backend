@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS `messages` (
   `sender_id` INT NOT NULL,
   `message` TEXT NOT NULL,
   `media_url` VARCHAR(500) DEFAULT NULL,
+  `status` VARCHAR(20) NOT NULL DEFAULT 'sent',
+  `seen_at` DATETIME(3) DEFAULT NULL,
   `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   CONSTRAINT `fk_messages_chat` FOREIGN KEY (`chat_id`) REFERENCES `chats` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   CONSTRAINT `fk_messages_sender` FOREIGN KEY (`sender_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,

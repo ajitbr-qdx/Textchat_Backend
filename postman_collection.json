@@ -422,6 +422,30 @@
             "description": "Upload a photo or attachment file via multipart/form-data. Broadcasts new_message with mediaUrl."
           },
           "response": []
+        },
+        {
+          "name": "Mark Messages as Seen",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{authToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/chats/{{chatId}}/seen",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "chats", "{{chatId}}", "seen"]
+            },
+            "description": "Marks all unread messages in the chat as seen and broadcasts message_seen."
+          },
+          "response": []
         }
       ]
     }

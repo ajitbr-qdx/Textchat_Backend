@@ -6,6 +6,7 @@ import { prisma } from '../config/prisma.js';
 import { AuthUser } from '../types/index.js';
 
 let ioInstance: Server | null = null;
+const onlineUsers = new Map<number, Set<string>>(); // userId -> Set of socket IDs
 
 export const getSocketIO = (): Server => {
   if (!ioInstance) {
@@ -24,7 +25,6 @@ export const initSocketIO = (server: HttpServer): Server => {
   });
 
   // Authentication Middleware for WebSockets
-  // Supports query parameter (?token=...), auth payload, or Authorization header
   io.use((socket: Socket, next) => {
     const queryToken = typeof socket.handshake.query?.token === 'string' ? socket.handshake.query.token : undefined;
     const authToken = socket.handshake.auth?.token;
@@ -49,9 +49,21 @@ export const initSocketIO = (server: HttpServer): Server => {
     const user = socket.data.user as AuthUser;
     console.log(`[Socket] User connected: ${user.name} (#${user.id}) - Socket ID: ${socket.id}`);
 
+    // Track online status
+    if (!onlineUsers.has(user.id)) {
+      onlineUsers.set(user.id, new Set());
+    }
+    onlineUsers.get(user.id)!.add(socket.id);
+
+    // Broadcast user online presence
+    io.emit('user_online', {
+      userId: user.id,
+      name: user.name,
+      timestamp: new Date().toISOString(),
+    });
+
     // Join user's personal channel for direct user notifications
     socket.join(`user_${user.id}`);
-    socket.join(String(user.id));
 
     // Room Joining: Listen for "join_chat" with { "chatId": "101" } or { chatId: 101 }
     socket.on('join_chat', async (data: { chatId: string | number }, callback?: (response: any) => void) => {
@@ -78,16 +90,15 @@ export const initSocketIO = (server: HttpServer): Server => {
           return;
         }
 
-        // Join both "chat_<id>" and "<id>" rooms for flexible client compatibility
-        socket.join(`chat_${chatId}`);
-        socket.join(String(chatId));
-        console.log(`[Socket] User ${user.name} (${user.id}) joined room chat_${chatId}`);
+        const roomName = `chat_${chatId}`;
+        socket.join(roomName);
+        console.log(`[Socket] User ${user.name} (${user.id}) joined room ${roomName}`);
 
         if (callback) {
           callback({
             success: true,
             chatId: String(chatId),
-            room: `chat_${chatId}`,
+            room: roomName,
           });
         }
       } catch (err: any) {
@@ -98,14 +109,16 @@ export const initSocketIO = (server: HttpServer): Server => {
     // Leave chat room
     socket.on('leave_chat', (data: { chatId: string | number }) => {
       if (data?.chatId) {
-        const chatId = String(data.chatId);
-        socket.leave(`chat_${chatId}`);
-        socket.leave(chatId);
-        console.log(`[Socket] User ${user.id} left room chat_${chatId}`);
+        const chatId = parseInt(String(data.chatId), 10);
+        if (!isNaN(chatId)) {
+          const roomName = `chat_${chatId}`;
+          socket.leave(roomName);
+          console.log(`[Socket] User ${user.id} left room ${roomName}`);
+        }
       }
     });
 
-    // Send Message: Listen for "send_message" with { "chatId", "recipientId", "message", "mediaUrl"? }
+    // 1. Send Message
     socket.on(
       'send_message',
       async (
@@ -161,13 +174,14 @@ export const initSocketIO = (server: HttpServer): Server => {
             return;
           }
 
-          // Persist message in MySQL
+          // Persist message in MySQL with initial status 'sent'
           const savedMessage = await prisma.message.create({
             data: {
               chatId: resolvedChatId,
               senderId: user.id,
               message: messageText || (mediaUrl ? '[Attachment]' : ''),
               mediaUrl: mediaUrl,
+              status: 'sent',
             },
             include: {
               sender: {
@@ -180,8 +194,6 @@ export const initSocketIO = (server: HttpServer): Server => {
             },
           });
 
-          // Android expected payload structure:
-          // { "id", "chatId", "senderId", "senderName", "message", "mediaUrl", "timestamp" }
           const formattedMessage = {
             id: savedMessage.id,
             chatId: String(savedMessage.chatId),
@@ -189,8 +201,9 @@ export const initSocketIO = (server: HttpServer): Server => {
             senderName: user.name,
             message: savedMessage.message,
             mediaUrl: savedMessage.mediaUrl || null,
+            status: savedMessage.status, // "sent"
+            seenAt: savedMessage.seenAt,
             timestamp: savedMessage.createdAt.toISOString(),
-            // Backward-compatible fields
             chat_id: savedMessage.chatId,
             sender_id: savedMessage.senderId,
             created_at: savedMessage.createdAt.toISOString(),
@@ -201,14 +214,11 @@ export const initSocketIO = (server: HttpServer): Server => {
             },
           };
 
-          // Broadcast to chat room(s)
+          // Broadcast to chat room ONCE
           io.to(`chat_${resolvedChatId}`).emit('new_message', formattedMessage);
-          io.to(String(resolvedChatId)).emit('new_message', formattedMessage);
 
-          // Direct broadcast to recipient's personal user channel
+          // Alert recipient's personal user channel with notification event
           const targetRecipientId = chat.user1Id === user.id ? chat.user2Id : chat.user1Id;
-          io.to(`user_${targetRecipientId}`).emit('new_message', formattedMessage);
-          io.to(String(targetRecipientId)).emit('new_message', formattedMessage);
           io.to(`user_${targetRecipientId}`).emit('chat_notification', {
             chatId: String(resolvedChatId),
             message: formattedMessage,
@@ -224,39 +234,161 @@ export const initSocketIO = (server: HttpServer): Server => {
       }
     );
 
-    // Typing status
+    // 2. Message Delivered Event (client received message)
+    socket.on(
+      'message_delivered',
+      async (data: { messageId?: number; chatId: string | number }, callback?: (response: any) => void) => {
+        try {
+          const chatId = parseInt(String(data.chatId), 10);
+          const messageId = data.messageId ? parseInt(String(data.messageId), 10) : undefined;
+
+          if (isNaN(chatId)) {
+            if (callback) callback({ success: false, message: 'chatId is required' });
+            return;
+          }
+
+          if (messageId) {
+            // Update specific message
+            await prisma.message.updateMany({
+              where: {
+                id: messageId,
+                chatId,
+                senderId: { not: user.id }, // only update if sent by the other user
+                status: 'sent',
+              },
+              data: { status: 'delivered' },
+            });
+          } else {
+            // Update all unread sent messages in this chat sent to this user
+            await prisma.message.updateMany({
+              where: {
+                chatId,
+                senderId: { not: user.id },
+                status: 'sent',
+              },
+              data: { status: 'delivered' },
+            });
+          }
+
+          const payload = {
+            chatId: String(chatId),
+            messageId: messageId || null,
+            userId: user.id,
+            status: 'delivered',
+            timestamp: new Date().toISOString(),
+          };
+
+          io.to(`chat_${chatId}`).emit('message_delivered', payload);
+          if (callback) callback({ success: true, data: payload });
+        } catch (err: any) {
+          console.error('[Socket] message_delivered error:', err);
+          if (callback) callback({ success: false, message: err.message });
+        }
+      }
+    );
+
+    // 3. Message Seen / Read Event (recipient viewed message)
+    socket.on(
+      'message_seen',
+      async (data: { messageId?: number; chatId: string | number }, callback?: (response: any) => void) => {
+        try {
+          const chatId = parseInt(String(data.chatId), 10);
+          const messageId = data.messageId ? parseInt(String(data.messageId), 10) : undefined;
+
+          if (isNaN(chatId)) {
+            if (callback) callback({ success: false, message: 'chatId is required' });
+            return;
+          }
+
+          const now = new Date();
+
+          if (messageId) {
+            await prisma.message.updateMany({
+              where: {
+                id: messageId,
+                chatId,
+                senderId: { not: user.id },
+              },
+              data: {
+                status: 'seen',
+                seenAt: now,
+              },
+            });
+          } else {
+            // Mark all unread messages from the other user in this chat as seen
+            await prisma.message.updateMany({
+              where: {
+                chatId,
+                senderId: { not: user.id },
+                status: { not: 'seen' },
+              },
+              data: {
+                status: 'seen',
+                seenAt: now,
+              },
+            });
+          }
+
+          const payload = {
+            chatId: String(chatId),
+            messageId: messageId || null,
+            userId: user.id,
+            status: 'seen',
+            seenAt: now.toISOString(),
+          };
+
+          // Broadcast to chat room so sender sees double blue checkmark
+          io.to(`chat_${chatId}`).emit('message_seen', payload);
+          if (callback) callback({ success: true, data: payload });
+        } catch (err: any) {
+          console.error('[Socket] message_seen error:', err);
+          if (callback) callback({ success: false, message: err.message });
+        }
+      }
+    );
+
+    // 4. Typing indicators
     socket.on('typing', (data: { chatId: string | number }) => {
       if (data?.chatId) {
-        const cId = String(data.chatId);
-        socket.to(`chat_${cId}`).emit('user_typing', {
-          chatId: cId,
-          userId: user.id,
-          name: user.name,
-        });
-        socket.to(cId).emit('user_typing', {
-          chatId: cId,
-          userId: user.id,
-          name: user.name,
-        });
+        const cId = parseInt(String(data.chatId), 10);
+        if (!isNaN(cId)) {
+          socket.to(`chat_${cId}`).emit('user_typing', {
+            chatId: String(cId),
+            userId: user.id,
+            name: user.name,
+          });
+        }
       }
     });
 
     socket.on('stop_typing', (data: { chatId: string | number }) => {
       if (data?.chatId) {
-        const cId = String(data.chatId);
-        socket.to(`chat_${cId}`).emit('user_stop_typing', {
-          chatId: cId,
-          userId: user.id,
-        });
-        socket.to(cId).emit('user_stop_typing', {
-          chatId: cId,
-          userId: user.id,
-        });
+        const cId = parseInt(String(data.chatId), 10);
+        if (!isNaN(cId)) {
+          socket.to(`chat_${cId}`).emit('user_stop_typing', {
+            chatId: String(cId),
+            userId: user.id,
+          });
+        }
       }
     });
 
+    // 5. Disconnection
     socket.on('disconnect', () => {
       console.log(`[Socket] User disconnected: ${user.name} (#${user.id})`);
+
+      const userSockets = onlineUsers.get(user.id);
+      if (userSockets) {
+        userSockets.delete(socket.id);
+        if (userSockets.size === 0) {
+          onlineUsers.delete(user.id);
+          // Broadcast offline presence
+          io.emit('user_offline', {
+            userId: user.id,
+            lastSeen: new Date().toISOString(),
+          });
+        }
+      }
     });
   });
 

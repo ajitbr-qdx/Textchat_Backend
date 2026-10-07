@@ -44,8 +44,10 @@ model Message {
   chatId    Int      @map("chat_id")
   senderId  Int      @map("sender_id")
   message   String   @db.Text
-  mediaUrl  String?  @map("media_url") @db.VarChar(500)
-  createdAt DateTime @default(now()) @map("created_at")
+  mediaUrl  String?   @map("media_url") @db.VarChar(500)
+  status    String    @default("sent") @db.VarChar(20)
+  seenAt    DateTime? @map("seen_at")
+  createdAt DateTime  @default(now()) @map("created_at")
 
   // Relations
   chat   Chat @relation(fields: [chatId], references: [id], onDelete: Cascade)

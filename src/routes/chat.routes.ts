@@ -9,6 +9,7 @@ import {
   getMessages,
   sendMessage,
   uploadAttachment,
+  markChatAsSeen,
   sendMessageSchema,
 } from '../controllers/message.controller.js';
 import { authenticateJwt } from '../middlewares/auth.middleware.js';
@@ -27,6 +28,7 @@ router.get('/:chatId', getChatById);
 // Chat messages
 router.get('/:chatId/messages', getMessages);
 router.post('/:chatId/messages', validateBody(sendMessageSchema), sendMessage);
+router.put('/:chatId/seen', markChatAsSeen);
 
 // Photo / file attachments upload (accepts field names: file, photo, image, attachment, etc.)
 const handleAttachmentUpload = (req: any, res: any, next: any) => {
