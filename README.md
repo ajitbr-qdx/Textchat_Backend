@@ -136,7 +136,43 @@ POST /api/auth/register
 | `GET` | `/api/chats/:chatId` | Get single chat details | Yes (Bearer) |
 | `GET` | `/api/chats/:chatId/messages` | Get message history (`?page=1&limit=50`) | Yes (Bearer) |
 | `POST` | `/api/chats/:chatId/messages` | Send message via REST (`{ message: string }`) | Yes (Bearer) |
-| `POST` | `/api/chats/:chatId/attachments` | Multipart photo/file upload (`file` or `photo`) | Yes (Bearer) |
+| `POST` | `/api/chats/:chatId/attachments` | Multipart photo/file upload (`file` or `photo`) with automated **ClamAV antivirus scan** | Yes (Bearer) |
+
+---
+
+## 🛡️ Antivirus Scanning (ClamAV Integration)
+
+All file and photo attachments uploaded to `POST /api/chats/:chatId/attachments` are automatically scanned for malware using **ClamAV** before being accepted or saved to disk.
+
+### 1. Starting ClamAV with Docker
+Run the ClamAV daemon container defined in [`docker-compose.yml`](docker-compose.yml):
+```bash
+docker compose up -d clamav
+```
+*(On first launch, ClamAV will download the latest virus definitions database via `freshclam` which takes 1–2 minutes).*
+
+### 2. Configuration (`.env`)
+```env
+CLAMAV_ENABLED=true
+CLAMAV_HOST="127.0.0.1"
+CLAMAV_PORT=3310
+CLAMAV_TIMEOUT=60000
+CLAMAV_BLOCK_ON_FAIL=false  # Set to true in strict production
+```
+
+### 3. Testing Detection with EICAR
+You can test threat detection safely using the standard **EICAR Antivirus Test File** string:
+```
+X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+TH*
+```
+If an attachment containing this signature is sent, the server immediately purges the file from disk and responds with:
+```json
+{
+  "success": false,
+  "message": "Security Alert: Attachment rejected because malware or a virus was detected.",
+  "viruses": ["Win.Test.EICAR_HDB-1"]
+}
+```
 
 ---
 

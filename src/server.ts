@@ -24,6 +24,8 @@ function getLocalIp(): string {
   return 'localhost';
 }
 
+import { initClamAV } from './services/clamav.service.js';
+
 // Test database connection and start server
 async function startServer() {
   try {
@@ -33,6 +35,11 @@ async function startServer() {
   } catch (error: any) {
     console.warn('⚠️ Warning: Could not connect to MySQL at startup. Please ensure your MySQL server is running and DATABASE_URL is correct.');
     console.warn(`Details: ${error.message}`);
+  }
+
+  // Check ClamAV Antivirus Daemon
+  if (config.clamav.enabled) {
+    initClamAV().catch(() => {});
   }
 
   const localIp = getLocalIp();

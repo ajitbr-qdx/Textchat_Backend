@@ -11,5 +11,15 @@ services:
     volumes:
       - mysql_data:/var/lib/mysql
 
+  clamav:
+    image: clamav/clamav:latest
+    container_name: chat_clamav
+    restart: unless-stopped
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav_data:/var/lib/clamav
+
 volumes:
   mysql_data:
+  clamav_data:

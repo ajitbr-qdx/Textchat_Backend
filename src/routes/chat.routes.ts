@@ -15,6 +15,7 @@ import {
 import { authenticateJwt } from '../middlewares/auth.middleware.js';
 import { validateBody } from '../middlewares/validate.middleware.js';
 import { uploadAttachment as multerUpload } from '../middlewares/upload.middleware.js';
+import { scanUploadedFile } from '../middlewares/virusScan.middleware.js';
 
 const router = Router();
 
@@ -41,6 +42,11 @@ const handleAttachmentUpload = (req: any, res: any, next: any) => {
   });
 };
 
-router.post('/:chatId/attachments', handleAttachmentUpload, uploadAttachment);
+router.post(
+  '/:chatId/attachments',
+  handleAttachmentUpload,
+  scanUploadedFile,
+  uploadAttachment
+);
 
 export default router;
